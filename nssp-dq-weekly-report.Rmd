@@ -59,25 +59,29 @@ count_by_hosp = function(start_days_ago = 91, end_days_ago=2, hosp_ids = hospita
 }
 
 
-#Get data details
+#Get data details, ED by default, both ED and inpatient if false
+#can pull only E, E + I, or all patient classes
 get_data_details = function(start_days_ago = 91, end_days_ago=2, hosp_ids = hospitals$C_BioFacility_Id, 
                             fields = c("HospitalName", "date", "age", "sex", "zipcode", "Patient_City","C_Patient_County",
                                        "ChiefComplaintOrig", "ChiefComplaintParsed",
                                        "DischargeDiagnosis", "DischargeDisposition", "Race_flat", "Ethnicity_flat",
                                        "TriageNotesOrig", "Insurance_Coverage", "PregnancyStatus","Pregnancy_Status_Code",
                                        "Travel_History"),
-                            hasBeenE = T, filter = ""){
+                            hasBeenE = T, hasBeenI = F, allClasses = F, filter = ""){
   hosp = paste0("&geography=",paste0(hosp_ids, collapse = "&geography="))
   vars = paste0("&field=", paste0(fields, collapse = "&field="))
   
  url = paste0(
     "https://essence.syndromicsurveillance.org/nssp_essence/api/dataDetails?endDate=",
-    essence_api_date(end_days_ago),
+    essence_api_date(days_ago = end_days_ago),
     hosp,
     "&percentParam=noPercent&geographySystem=hospital&datasource=va_hosp&detector=probrepswitch&startDate=",
-    essence_api_date(start_days_ago),
+    essence_api_date(days_ago = start_days_ago),
     "&timeResolution=daily",
-    ifelse(hasBeenE == T,"&hasBeenE=1",""),
+    #ifelse(hasBeenEOnly == T,"&hasBeenE=1","&hasBeenO=0"),
+    case_when(hasBeenE & hasBeenI == F ~ "&hasBeenE=1",
+              hasBeenE & hasBeenI ~ "&hasBeenO=0",
+              allClasses ~ ""),
     "&medicalGroupingSystem=essencesyndromes&userId=660&site=890&aqtTarget=DataDetails",
     filter, vars
   )
@@ -265,8 +269,8 @@ The figure above displays total counts of **inpatient** visits in NSSP for the l
 
 ```{r fields, echo = FALSE, comment=FALSE, warning=FALSE}
 
-#Pull down data from last week (excluding today) for chief complaint, age, sex, zip, city, county
-week_data_details = get_data_details(start_days_ago = 8, end_days_ago = 1, hosp_ids = hospitals$C_Biosense_Facility_ID,
+#Pull down data from last week (excluding today) for chief complaint, age, sex, zip, city, county; all E and I visits
+week_data_details = get_data_details(start_days_ago = 8, end_days_ago = 1, hosp_ids = hospitals$C_BioFacility_Id, hasBeenI = T,
                              fields = c("HospitalName", "date", "ChiefComplaintOrig","ccInformative", "age", "sex",
                                         "zipcode", "Patient_City", "C_Patient_County", "Race_flat", "Ethnicity_flat"))
 
@@ -288,9 +292,9 @@ week_data = week_data_details %>%
 
 
 
-#Pull data for discharge diagnosis and discharge disposition for the last month minus the last week
-month_data_details = get_data_details(start_days_ago = 30, end_days_ago = 7, hosp_ids = hospitals$C_Biosense_Facility_ID,
-                                     fields = c("HospitalName", "DischargeDiagnosis", "ddInformative",
+#Pull data for discharge diagnosis and discharge disposition for the last month minus the last week, all E & I visits
+month_data_details = get_data_details(start_days_ago = 30, end_days_ago = 7, hosp_ids = hospitals$C_BioFacility_Id, hasBeenI = T,
+                                     fields = c("HospitalName", "date", "DischargeDiagnosis", "ddInformative",
                                                 "DischargeDisposition"))
 
 #Summarise by hospital
@@ -332,41 +336,69 @@ left_join(week_data, month_data, by = "Hospital") %>%
 <br>
 <hr>
 
+<h3>Discharge Diagnosis Informative by Day for Flagged Hospitals</h3>
+<br>
+
+```{r dd_day_plot, echo = FALSE, comment=FALSE, warning=FALSE, fig.width=12, fig.align='center'}
+
+#pull hospitals with DD issues
+hosp_dd_flag <- filter(month_data, `Discharge Diagnosis Informative` < 75) %>% pull(Hospital)
+
+#create data to plot dd over time for flagged hospitals
+hosp_dd_flag_day <- month_data_details %>%
+  mutate(Hospital = gsub("IL-","",HospitalName),
+         Date = lubridate::mdy(Date)) %>%
+  filter(Hospital %in% hosp_dd_flag) %>%
+  group_by(Hospital, Date) %>%
+  dplyr::summarise(perc_informative = round(sum(as.numeric(DDInformative))/length(DDInformative)*100,0)) %>%
+  ungroup()
+
+#plot dd for flagged hospitals
+hosp_dd_flag_plot <- ggplot(data = hosp_dd_flag_day, aes(x = Date, y = perc_informative, group = Hospital)) +
+  geom_point(size = 1) +
+    geom_line(size = .5) +
+    facet_wrap(~Hospital, scales = "free_y", ncol = 3) +
+    labs(title = "", x = "Date", y = "Percent DD Informative") +
+    theme(panel.grid = element_blank(), panel.background = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+#Making interactive
+ggplotly(hosp_dd_flag_plot, height = (200*ceiling(nrow(hosp_dd_flag)/3)), width = 1200)
+
+```
+The figure above displays the percent of discharge diagnoses with informative data by day for flagged hospitals. 
+
+<br>
+<hr>
+
 <h3>Data Quality for Additional Fields</h3>
 <br>
 
 ```{r add_fields, echo = FALSE, comment=FALSE, warning=FALSE}
 
-#Pull data for triage notes, insurance coverage, onset date, pregnancy status, and travel history
-additional_data_details = get_data_details(start_days_ago = 30, end_days_ago = 7, hosp_ids = hospitals$C_Biosense_Facility_ID,
+#Pull data for triage notes, insurance coverage, onset date, pregnancy status, and travel history, E visits only
+additional_data_details = get_data_details(start_days_ago = 30, end_days_ago = 7, hosp_ids = hospitals$C_BioFacility_Id,
                                         fields = c("HospitalName", "TriageNotesOrig", "Insurance_Coverage", "Onset_Date",
-                                                   "Pregnancy_Status_Code", "Travel_History"))
+                                                   "Pregnancy_Status_Code", "Travel_History", "Height", "Weight", "Initial_Temp", "Initial_Pulse_Oximetry")) %>%
+  rename(Hospital = HospitalName)
 
 #Summarise by hospital
 add_data = additional_data_details %>%
-  group_by(HospitalName) %>%
-  dplyr::summarise(`Triage Notes` = perc_complete(TriageNotesOrig),
-                   `Insurance Coverage` = perc_complete(Insurance_Coverage),
-                   `Onset Date` = perc_complete(Onset_Date),
-                   `Pregnancy Status` = perc_complete(Pregnancy_Status_Code),
-                   `Travel History` = perc_complete(Travel_History)
-  ) %>%
-  dplyr::rename(Hospital = HospitalName) %>%
+  group_by(Hospital) %>%
+  summarize(across(TriageNotesOrig:Initial_Pulse_Oximetry, perc_complete)) %>%
+  janitor::clean_names(case = "title") %>%
+  rename(`Triage Note` = `Triage Notes Orig`) %>%
   mutate(Hospital = gsub("IL-","",Hospital)) %>%
-  mutate(sum = rowSums(.[2:6])) %>%
+  mutate(sum = rowSums(.[2:9])) %>%
   arrange(-sum) %>%
   select(-sum)
 
 #summarise overall and join
 add_data_overall = additional_data_details %>%
-  dplyr::summarise(`Triage Notes` = perc_complete(TriageNotesOrig),
-                   `Insurance Coverage` = perc_complete(Insurance_Coverage),
-                   `Onset Date` = perc_complete(Onset_Date),
-                   `Pregnancy Status` = perc_complete(Pregnancy_Status_Code),
-                   `Travel History` = perc_complete(Travel_History)
-  ) %>%
+  summarize(across(TriageNotesOrig:Initial_Pulse_Oximetry, perc_complete)) %>%
+  janitor::clean_names(case = "title") %>%
+  rename(`Triage Note` = `Triage Notes Orig`) %>%
   mutate(Hospital = "Overall") %>%
-  select(Hospital, `Triage Notes`:`Travel History`)%>%
+  relocate(Hospital) %>%
   full_join(add_data, by = colnames(add_data))
 
 #Create kable
@@ -378,7 +410,7 @@ add_data_overall %>%
   }) %>%
   kable(escape = F, align = "c") %>%
   kable_styling(c("hover", "condensed"), full_width = F)%>%
-  add_header_above(c(" "=1, "Last Month (Except this Week)" = 5))%>%
+  add_header_above(c(" "=1, "Last Month (Except this Week)" = 9))%>%
   row_spec(1,  background = "#EBEFEF")
 
 ```
@@ -394,37 +426,38 @@ add_data_overall %>%
 ```{r patientclass, echo = FALSE, comment=FALSE, warning=FALSE, fig.width=12, fig.height=6, fig.align='center'}
 
 #Pull patient class for last week minus today
-patient_class_data_details = get_data_details(start_days_ago = 8, end_days_ago = 1, hosp_ids = hospitals$C_Biosense_Facility_ID,
-                                      fields = c("HospitalName", "patientClass","hasbeenE"), hasBeenE = F)
+patient_class_data_details = get_data_details(start_days_ago = 8, end_days_ago = 1, hosp_ids = hospitals$C_BioFacility_Id, allClasses = T,
+                                      fields = c("HospitalName", "C_Patient_Class_List"))
 
 #Format
-patient_class_data = patient_class_data_details %>%
-  mutate(PatientClass = ifelse(HasBeenE == 1, "E", PatientClass)) %>%
-  mutate(PatientClass = factor(PatientClass, levels = c("E", "I", "O", "V", "P", "R", "B", "D", "U"))) %>%
-  dplyr::rename(Hospital = HospitalName) %>%
-  mutate(Hospital = gsub("IL-", "", Hospital)) %>%
-  mutate(Hospital = factor(Hospital)) %>%
-  group_by(Hospital, PatientClass, .drop = FALSE) %>%
-  dplyr::tally() %>%
-  spread(PatientClass, n) %>%
+patient_class_data <- patient_class_data_details %>%
+  rename(Hospital = HospitalName) %>%
+  mutate(emergency = grepl("E", C_Patient_Class_List),
+         inpatient = grepl("I", C_Patient_Class_List),
+         observation = grepl("V", C_Patient_Class_List),
+         outpatient = grepl("O", C_Patient_Class_List),
+         preadmit = grepl("P", C_Patient_Class_List),
+         recurring = grepl("R", C_Patient_Class_List),
+         obsetric = grepl("B", C_Patient_Class_List),
+         direct_admit = grepl("D", C_Patient_Class_List),
+         unknown = grepl("U", C_Patient_Class_List)) %>%
+  group_by(Hospital) %>%
+  summarize(across(emergency:unknown, ~sum(.x, na.rm = T))) %>%
   ungroup() %>%
-  mutate(sum = rowSums(.[3:10])) %>%
-  arrange(-sum) %>%
-  select(-sum) %>%
-  mutate(Hospital = factor(Hospital, levels = rev(Hospital))) %>%
-  gather("PatientClass", "Count", -Hospital)%>%
-  mutate(PatientClass = factor(PatientClass, levels = (c("E", "I", "O", "V", "P", "R", "B", "D", "U")))) %>%
-  mutate(PatientClass = recode(PatientClass, E = "Ever Emergency", I = "Inpatient", O = "Outpatient",
-                               V = "Observation", P = "Pre-Admit", R = "Recurring", B = "Obsetric", D = "Direct Admit", U = "Unknown")
-  ) 
+  janitor::clean_names(case = "title") %>%
+  pivot_longer(-Hospital, names_to = "visit_type", values_to = "count") %>%
+  mutate(visit_type = factor(visit_type, ordered = T, 
+                             levels = c("Emergency", "Inpatient", "Observation", "Outpatient", "Obsetric", "Preadmit", "Recurring", "Direct Admit", "Unknown"))) %>%
+  group_by(Hospital) %>%
+  mutate(total = sum(count)) %>%
+  ungroup()
 
 #Create plot
-g<- ggplot(patient_class_data, aes(x=Hospital, y=Count, fill=PatientClass)) +
+g<- ggplot(patient_class_data, aes(x=reorder(Hospital, total), y=count, fill=reorder(visit_type, desc(visit_type)))) +
   geom_bar(stat='identity')+
   coord_flip() + 
-  scale_fill_tableau(palette = "Tableau 10",
-                    guide = guide_legend(reverse = TRUE))+
-  theme_minimal() + xlab("") + ylab("")
+  scale_fill_tableau(palette = "Tableau 10", direction = -1)+
+  theme_minimal() + xlab("") + ylab("") + labs(fill = "Visit Type")
 
 #Make plot interactive
 ggplotly(g)

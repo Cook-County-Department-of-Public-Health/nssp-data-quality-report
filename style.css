@@ -1,0 +1,13 @@
+body .main-container {
+max-width: 1200px;
+}
+
+hr { 
+    margin-before: 0.5em;
+    margin-after: 0.5em;
+    margin-start: auto;
+    margin-end: auto;
+    overflow: hidden;
+    border-width: 2px;
+    border-color: #DCE2E2;
+}
