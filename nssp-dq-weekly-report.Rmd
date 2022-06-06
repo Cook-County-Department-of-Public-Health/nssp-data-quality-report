@@ -1,0 +1,466 @@
+---
+output: 
+  html_document:
+    css: style.css
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(jsonlite)
+library(httr)
+library(magrittr)
+library(dplyr)
+library(keyring)
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(kableExtra)
+library(ggthemes)
+
+#load ccdph custom nssp functions
+devtools::source_url("https://github.com/Cook-County-Department-of-Public-Health/ccdph-functions/blob/master/essence-api-functions.R?raw=TRUE")
+
+#set path to ccdph essence one drive - include trailing slash, only needs to be done once per computer
+#key_set("nssp-onedrive")
+
+#Future: include AHQ census estimates to compare to expected volumes? Once a year review?
+
+```
+
+```{r load_data, include=FALSE}
+
+#Cook hospitals info
+hospitals = read_csv(paste0(key_get("nssp-onedrive"),"Illinois Master Facility Table_06062022.csv")) %>%
+  filter(Essence_Region == "IL_Cook" & Status == "Active") %>%
+  select(c(Facility_Name, Facility_Display_Name, C_BioFacility_Id))
+
+#Get table of visits by hospital for select number of days in past
+count_by_hosp = function(start_days_ago = 91, end_days_ago=2, hosp_ids = hospitals$C_BioFacility_Id, inpatient_only = F, 
+                         perc_param = "noPercent", filter = "", count_name = "Count"){
+  hosp = paste0("&geography=",paste0(hosp_ids, collapse = "&geography="))
+  api = paste0("https://essence.syndromicsurveillance.org/nssp_essence/api/tableBuilder?endDate=",
+               essence_api_date(days_ago = end_days_ago),
+               hosp,
+               "&percentParam=",
+               perc_param,
+               "&geographySystem=hospital&datasource=va_hosp&detector=probrepswitch&startDate=",
+               essence_api_date(days_ago = start_days_ago), 
+               filter,
+               "&timeResolution=daily&",
+               ifelse(inpatient_only, "hasBeenI=1", "hasBeenE=1"),
+               "&medicalGroupingSystem=essencesyndromes&userId=2541&site=890&aqtTarget=TableBuilder&rowFields=timeResolution&columnField=geographyhospital"
+               )
+  #return(api)
+  nssp_get_table(api) %>%
+    set_colnames(c("Date", "Hospital", count_name)) %>%
+    mutate(Date = as.Date(Date)) %>%
+    mutate(Hospital = gsub("IL-", "", Hospital))
+}
+
+
+#Get data details
+get_data_details = function(start_days_ago = 91, end_days_ago=2, hosp_ids = hospitals$C_BioFacility_Id, 
+                            fields = c("HospitalName", "date", "age", "sex", "zipcode", "Patient_City","C_Patient_County",
+                                       "ChiefComplaintOrig", "ChiefComplaintParsed",
+                                       "DischargeDiagnosis", "DischargeDisposition", "Race_flat", "Ethnicity_flat",
+                                       "TriageNotesOrig", "Insurance_Coverage", "PregnancyStatus","Pregnancy_Status_Code",
+                                       "Travel_History"),
+                            hasBeenE = T, filter = ""){
+  hosp = paste0("&geography=",paste0(hosp_ids, collapse = "&geography="))
+  vars = paste0("&field=", paste0(fields, collapse = "&field="))
+  
+ url = paste0(
+    "https://essence.syndromicsurveillance.org/nssp_essence/api/dataDetails?endDate=",
+    essence_api_date(end_days_ago),
+    hosp,
+    "&percentParam=noPercent&geographySystem=hospital&datasource=va_hosp&detector=probrepswitch&startDate=",
+    essence_api_date(start_days_ago),
+    "&timeResolution=daily",
+    ifelse(hasBeenE == T,"&hasBeenE=1",""),
+    "&medicalGroupingSystem=essencesyndromes&userId=660&site=890&aqtTarget=DataDetails",
+    filter, vars
+  )
+ #print(url)
+  table = nssp_get_table(url) %>% na_if("none") %>% na_if("") %>% na_if(";NR;")
+  return(table)
+  
+  
+}
+
+#Helper function to use in summarise to calculate percent complete (not na) for a variable
+perc_complete = function(x){
+  total = length(x)
+  notna = sum(!is.na(x))
+  perc = notna/total*100
+  perc = round(perc, 0)
+  return(perc)
+}
+
+#Count by day for last 90 days (starting 2 days ago) for each hospital
+all_counts_ed = count_by_hosp(91,2,hospitals$C_BioFacility_Id)
+
+```
+
+## Weekly NSSP Data Quality Report for Suburban Cook County Hospitals
+
+#### Generated `r format(Sys.Date(), format = "%B %d, %Y")`
+
+<hr>
+<h3>Daily Counts of ED NSSP Data</h3>
+
+```{r totalcount, echo = FALSE, fig.width=12, fig.height=4, fig.align="center"}
+#Sum across hospitals to calculate total daily counts
+total_daily = all_counts_ed %>%
+  group_by(Date) %>%
+  summarise(Count = sum(Count))
+
+#Calculate median and upper and lower limits for total data
+median = total_daily %>%
+  filter(Date < max(Date) - 6) %>%
+  select(Count) %>%
+  summarise(median(Count)) %>%
+  deframe()
+lower_limit = (median*0.75) %>% round(0)
+upper_limit = (median*1.25) %>% round(0)
+
+#Create ggplot chart of visits by day with median and limits
+counts <- ggplot(data = total_daily, aes(x = Date, y = Count)) +
+  geom_point(size = 2) +
+  geom_line(size = 1) +
+  geom_hline(aes(yintercept = median)) +
+  geom_hline(aes(yintercept = upper_limit), linetype = 3) +
+  geom_hline(aes(yintercept = lower_limit), linetype = 3) +
+  labs(title = "") +
+  theme(panel.grid = element_blank(), panel.background = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+#Making interactive
+ggplotly(counts)
+
+```
+
+The figure above displays total counts of **ED** visits in NSSP for the last 90 days. The solid black line represents the median number of visits per day, not including the last week. The dotted black lines are 25% above and below the median. 
+
+
+<br>
+<hr>
+<h3>Daily Counts of ED NSSP Data for Flagged Hospitals</h3>
+
+```{r hospcountflags, echo = FALSE, comment=FALSE, warning=FALSE, fig.width=12, fig.align='center'}
+
+#medians and upper and lower limits per hospital for last 90 days minus last week
+med_hosp = all_counts_ed %>%
+    filter(Date < (max(Date) - 6)) %>%
+    group_by(Hospital) %>%
+    summarise(median = median(Count) %>% round(0),
+              lower_limit = (median(Count)*.75) %>% ceiling(),
+              upper_limit = (median(Count)*1.25) %>% floor()
+    )
+
+#hospitals to flag- any data point in past 4 weeks above or below limits
+hosp_flags = all_counts_ed %>%
+    filter(Date > (max(Date) - 28)) %>%
+    group_by(Hospital) %>%
+    summarise(min = min(Count),
+              max = max(Count)
+    ) %>%
+    left_join(med_hosp, by = "Hospital") %>%
+    filter(min < lower_limit | max > upper_limit)
+
+#combining flag data with count data, adding colors for dots
+plot_hosps_data = all_counts_ed %>% 
+  filter(Hospital %in% hosp_flags$Hospital) %>%
+  left_join(med_hosp, by = "Hospital") %>%
+  mutate(color = ifelse(
+    Count < lower_limit | Count > upper_limit,
+    "orange", "black"
+  )) %>%
+  mutate(color = ifelse(
+    Count < median*0.5 | Count > median*1.5,
+    "red", color
+  ))
+
+#Creating plot for flagged hospitals
+hospcounts <- ggplot(data = plot_hosps_data, aes(x = Date, y = Count, group = Hospital)) +
+  geom_point(size = 1, colour = plot_hosps_data$color) +
+    geom_line(size = .5) +
+    geom_hline(data = hosp_flags, aes(yintercept = median)) +
+    geom_hline(data = hosp_flags, aes(yintercept = upper_limit), linetype = 3) +
+    geom_hline(data = hosp_flags, aes(yintercept = lower_limit), linetype = 3) +
+    facet_wrap(~Hospital, scales = "free_y", ncol = 3) +
+    labs(title = "") +
+    theme(panel.grid = element_blank(), panel.background = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+#Making interactive
+ggplotly(hospcounts, height = (200*ceiling(nrow(hosp_flags)/3)), width = 1200)
+
+```
+
+The figure above displays total counts of **ED** visits in NSSP for the last 90 days in hospitals with flags. The solid black line represents the median number of visits per day, not including the last week. The dotted black lines are 25% above and below the median. A hospital is flagged if it has a data point above the upper limit or below the lower limit (the dotted black lines) at some point in the past four weeks.
+
+<br>
+<hr>
+<h3>Daily Counts of Inpatient NSSP Data for Flagged Hospitals</h3>
+
+```{r hospcountflags_inpatient, echo = FALSE, comment=FALSE, warning=FALSE, fig.width=12, fig.align='center'}
+
+#Count by day for last 90 days (starting 2 days ago) for each hospital
+all_counts_inpt = count_by_hosp(91,2,hospitals$C_BioFacility_Id, inpatient_only = T)
+
+#medians and upper and lower limits per hospital for last 90 days minus last week
+med_hosp_inpt = all_counts_inpt %>%
+    filter(Date < (max(Date) - 6)) %>%
+    group_by(Hospital) %>%
+    summarise(median = median(Count) %>% round(0),
+              lower_limit = (median(Count)*.5) %>% ceiling(),  #more variety in inpatient counts, increase flag threshold
+              upper_limit = (median(Count)*1.5) %>% floor()
+    )
+
+#hospitals to flag- any data point in past 4 weeks above or below limits
+hosp_flags_inpt = all_counts_inpt %>%
+    filter(Date > (max(Date) - 28)) %>%
+    group_by(Hospital) %>%
+    summarise(min = min(Count),
+              max = max(Count)
+    ) %>%
+    left_join(med_hosp_inpt, by = "Hospital") %>%
+    filter(min < lower_limit | max > upper_limit)
+
+#combining flag data with count data, adding colors for dots
+plot_hosps_data_inpt = all_counts_inpt %>% 
+  filter(Hospital %in% hosp_flags_inpt$Hospital) %>%
+  left_join(med_hosp_inpt, by = "Hospital") %>%
+  mutate(color = ifelse(
+    Count < lower_limit | Count > upper_limit,
+    "orange", "black"
+  )) %>%
+  mutate(color = ifelse(
+    Count < median*0.25 | Count > median*1.75, #more variety in inpatient counts, increase flag threshold
+    "red", color
+  ))
+
+#Creating plot for flagged hospitals
+hospcounts_inpt <- ggplot(data = plot_hosps_data_inpt, aes(x = Date, y = Count, group = Hospital)) +
+  geom_point(size = 1, colour = plot_hosps_data_inpt$color) +
+    geom_line(size = .5) +
+    geom_hline(data = hosp_flags_inpt, aes(yintercept = median)) +
+    geom_hline(data = hosp_flags_inpt, aes(yintercept = upper_limit), linetype = 3) +
+    geom_hline(data = hosp_flags_inpt, aes(yintercept = lower_limit), linetype = 3) +
+    facet_wrap(~Hospital, scales = "free_y", ncol = 3) +
+    labs(title = "") +
+    theme(panel.grid = element_blank(), panel.background = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+#Making interactive
+ggplotly(hospcounts_inpt, height = (200*ceiling(nrow(hosp_flags_inpt)/3)), width = 1200)
+
+```
+
+The figure above displays total counts of **inpatient** visits in NSSP for the last 90 days in hospitals with flags. The solid black line represents the median number of visits per day, not including the last week. The dotted black lines are 25% above and below the median. A hospital is flagged if it has a data point above the upper limit or below the lower limit (the dotted black lines) at some point in the past four weeks.
+
+<br>
+<hr>
+
+<h3>Data Quality for Individual Fields by Hospital</h3>
+<br>
+
+```{r fields, echo = FALSE, comment=FALSE, warning=FALSE}
+
+#Pull down data from last week (excluding today) for chief complaint, age, sex, zip, city, county
+week_data_details = get_data_details(start_days_ago = 8, end_days_ago = 1, hosp_ids = hospitals$C_Biosense_Facility_ID,
+                             fields = c("HospitalName", "date", "ChiefComplaintOrig","ccInformative", "age", "sex",
+                                        "zipcode", "Patient_City", "C_Patient_County", "Race_flat", "Ethnicity_flat"))
+
+#Summarise weekly data by hospital
+week_data = week_data_details %>%
+  group_by(HospitalName) %>%
+  dplyr::summarise(`Chief Complaint Complete` = perc_complete(ChiefComplaintOrig),
+                   `Chief Complaint Informative` = round(sum(as.numeric(CCInformative))/length(CCInformative)*100,0),
+                   Age = perc_complete(Age),
+                   Sex = perc_complete(Sex),
+                   Zipcode = perc_complete(ZipCode),
+                   City = perc_complete(Patient_City),
+                   County = perc_complete(C_Patient_County),
+                   Race = perc_complete(Race_flat),
+                   Ethnicity = perc_complete(Ethnicity_flat)
+                   ) %>%
+  dplyr::rename(Hospital = HospitalName) %>%
+  mutate(Hospital = gsub("IL-","",Hospital)) 
+
+
+
+#Pull data for discharge diagnosis and discharge disposition for the last month minus the last week
+month_data_details = get_data_details(start_days_ago = 30, end_days_ago = 7, hosp_ids = hospitals$C_Biosense_Facility_ID,
+                                     fields = c("HospitalName", "DischargeDiagnosis", "ddInformative",
+                                                "DischargeDisposition"))
+
+#Summarise by hospital
+month_data = month_data_details %>%
+  group_by(HospitalName) %>%
+  dplyr::summarise(`Discharge Diagnosis Complete` = perc_complete(DischargeDiagnosis),
+                   `Discharge Diagnosis Informative` = round(sum(as.numeric(DDInformative))/length(DDInformative)*100,0),
+                   `Discharge Disposition` = perc_complete(DischargeDisposition)
+  ) %>%
+  dplyr::rename(Hospital = HospitalName) %>%
+  mutate(Hospital = gsub("IL-","",Hospital)) 
+
+
+#Data quality kable by hospital- combine week and month data
+left_join(week_data, month_data, by = "Hospital") %>%
+  mutate(sum = rowSums(.[2:13])) %>%
+  arrange(sum) %>%
+  select(-sum) %>%
+  mutate_at(c('Chief Complaint Complete','Chief Complaint Informative',
+              'Age','Sex','Zipcode','City','County','Race','Ethnicity'), function(x) {
+    cell_spec(x, bold = T, 
+              background = ifelse(x<50,"red",ifelse(x<90,"orange","white")),
+              color = ifelse(x<90, "white", "grey")
+    )
+  })%>%
+  mutate_at(vars(matches("Discharge")), function(x) {
+    cell_spec(x, bold = T, 
+              background = ifelse(x<50,"red",ifelse(x<75,"orange","white")),
+              color = ifelse(x<75, "white", "grey")
+    )
+  })%>%
+  kable(escape = F, align = "c") %>%
+  kable_styling(c("hover", "condensed"), full_width = F) %>%
+  column_spec(1, width = "8cm") %>%
+  add_header_above(c(" "=1, "Last Week (Except Today)" = 9, "Last Month (Except this Week)" = 3))
+
+```
+
+<br>
+<hr>
+
+<h3>Data Quality for Additional Fields</h3>
+<br>
+
+```{r add_fields, echo = FALSE, comment=FALSE, warning=FALSE}
+
+#Pull data for triage notes, insurance coverage, onset date, pregnancy status, and travel history
+additional_data_details = get_data_details(start_days_ago = 30, end_days_ago = 7, hosp_ids = hospitals$C_Biosense_Facility_ID,
+                                        fields = c("HospitalName", "TriageNotesOrig", "Insurance_Coverage", "Onset_Date",
+                                                   "Pregnancy_Status_Code", "Travel_History"))
+
+#Summarise by hospital
+add_data = additional_data_details %>%
+  group_by(HospitalName) %>%
+  dplyr::summarise(`Triage Notes` = perc_complete(TriageNotesOrig),
+                   `Insurance Coverage` = perc_complete(Insurance_Coverage),
+                   `Onset Date` = perc_complete(Onset_Date),
+                   `Pregnancy Status` = perc_complete(Pregnancy_Status_Code),
+                   `Travel History` = perc_complete(Travel_History)
+  ) %>%
+  dplyr::rename(Hospital = HospitalName) %>%
+  mutate(Hospital = gsub("IL-","",Hospital)) %>%
+  mutate(sum = rowSums(.[2:6])) %>%
+  arrange(-sum) %>%
+  select(-sum)
+
+#summarise overall and join
+add_data_overall = additional_data_details %>%
+  dplyr::summarise(`Triage Notes` = perc_complete(TriageNotesOrig),
+                   `Insurance Coverage` = perc_complete(Insurance_Coverage),
+                   `Onset Date` = perc_complete(Onset_Date),
+                   `Pregnancy Status` = perc_complete(Pregnancy_Status_Code),
+                   `Travel History` = perc_complete(Travel_History)
+  ) %>%
+  mutate(Hospital = "Overall") %>%
+  select(Hospital, `Triage Notes`:`Travel History`)%>%
+  full_join(add_data, by = colnames(add_data))
+
+#Create kable
+add_data_overall %>%
+  mutate_if(is.numeric, function(x) {
+    cell_spec(x, bold = ifelse(x>0, T, F),
+              color = "grey"
+    )
+  }) %>%
+  kable(escape = F, align = "c") %>%
+  kable_styling(c("hover", "condensed"), full_width = F)%>%
+  add_header_above(c(" "=1, "Last Month (Except this Week)" = 5))%>%
+  row_spec(1,  background = "#EBEFEF")
+
+```
+
+
+<br>
+<hr>
+
+<h3>Patient Class by Hospital</h3>
+*For Last Week (Except Today)*
+<br>
+
+```{r patientclass, echo = FALSE, comment=FALSE, warning=FALSE, fig.width=12, fig.height=6, fig.align='center'}
+
+#Pull patient class for last week minus today
+patient_class_data_details = get_data_details(start_days_ago = 8, end_days_ago = 1, hosp_ids = hospitals$C_Biosense_Facility_ID,
+                                      fields = c("HospitalName", "patientClass","hasbeenE"), hasBeenE = F)
+
+#Format
+patient_class_data = patient_class_data_details %>%
+  mutate(PatientClass = ifelse(HasBeenE == 1, "E", PatientClass)) %>%
+  mutate(PatientClass = factor(PatientClass, levels = c("E", "I", "O", "V", "P", "R", "B", "D", "U"))) %>%
+  dplyr::rename(Hospital = HospitalName) %>%
+  mutate(Hospital = gsub("IL-", "", Hospital)) %>%
+  mutate(Hospital = factor(Hospital)) %>%
+  group_by(Hospital, PatientClass, .drop = FALSE) %>%
+  dplyr::tally() %>%
+  spread(PatientClass, n) %>%
+  ungroup() %>%
+  mutate(sum = rowSums(.[3:10])) %>%
+  arrange(-sum) %>%
+  select(-sum) %>%
+  mutate(Hospital = factor(Hospital, levels = rev(Hospital))) %>%
+  gather("PatientClass", "Count", -Hospital)%>%
+  mutate(PatientClass = factor(PatientClass, levels = (c("E", "I", "O", "V", "P", "R", "B", "D", "U")))) %>%
+  mutate(PatientClass = recode(PatientClass, E = "Ever Emergency", I = "Inpatient", O = "Outpatient",
+                               V = "Observation", P = "Pre-Admit", R = "Recurring", B = "Obsetric", D = "Direct Admit", U = "Unknown")
+  ) 
+
+#Create plot
+g<- ggplot(patient_class_data, aes(x=Hospital, y=Count, fill=PatientClass)) +
+  geom_bar(stat='identity')+
+  coord_flip() + 
+  scale_fill_tableau(palette = "Tableau 10",
+                    guide = guide_legend(reverse = TRUE))+
+  theme_minimal() + xlab("") + ylab("")
+
+#Make plot interactive
+ggplotly(g)
+
+```
+
+
+<br>
+<hr>
+
+<h3>Chief Complaint Length by Hospital</h3>
+*For Last Week (Except Today)*
+<br>
+
+
+```{r cctype, echo = FALSE, comment=FALSE, warning=FALSE, fig.width=12, fig.height=6, fig.align='center'}
+
+cctype <- week_data_details %>%
+  mutate(CC_Word_Count = str_count(ChiefComplaintOrig, '\\w+')) %>%
+  select(HospitalName, CC_Word_Count) %>%
+  dplyr::rename(Hospital = HospitalName) %>%
+  mutate(Hospital = gsub("IL-", "", Hospital)) %>%
+  mutate(Hospital = factor(Hospital)) %>%
+  group_by(Hospital) %>%
+  summarize(Median_Word_Count = median(CC_Word_Count, na.rm = TRUE)) %>%
+  arrange(-Median_Word_Count)
+
+#Create plot
+cc_plot<- ggplot(cctype, aes(x=reorder(Hospital, Median_Word_Count), y=Median_Word_Count)) +
+  geom_bar(stat='identity', fill = "#4e79a4")+
+  coord_flip() + 
+  theme_minimal() + xlab("") + ylab("Median Number of Words Per CC")
+
+#Make plot interactive
+ggplotly(cc_plot)
+  
+
+
+```
