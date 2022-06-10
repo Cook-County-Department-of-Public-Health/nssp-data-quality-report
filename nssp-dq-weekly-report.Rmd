@@ -31,7 +31,7 @@ devtools::source_url("https://github.com/Cook-County-Department-of-Public-Health
 ```{r load_data, include=FALSE}
 
 #Cook hospitals info
-hospitals = read_csv(paste0(key_get("nssp-onedrive"),"Illinois Master Facility Table_06062022.csv")) %>%
+hospitals = read_csv("C://Users/rishi.kowalski/Data/scc-files/illinois_master_facility_table_06062022.csv") %>%
   filter(Essence_Region == "IL_Cook" & Status == "Active") %>%
   select(c(Facility_Name, Facility_Display_Name, C_BioFacility_Id))
 
