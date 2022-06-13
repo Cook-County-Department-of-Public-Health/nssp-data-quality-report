@@ -18,7 +18,6 @@ if(as.Date(file.mtime(paste0(repo_path,"nssp-dq-weekly-report.html"))) == Sys.Da
   #send email
   send.mail(from = "noreply@cookcountyhhs.org",
             to =  c("rishi.kowalski@cookcountyhealth.org", "kelley.bemis@cookcountyhealth.org"), 
-            #to = "kbemis@cookcountyhhs.org",
             subject = "Weekly NSSP DQ Report",
             body = "Please see the weekly data quality report attached.",
             smtp = list(host.name = "cchhssync02.cchhs.local", #port = 25,
