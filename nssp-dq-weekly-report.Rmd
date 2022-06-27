@@ -113,7 +113,7 @@ all_counts_ed = count_by_hosp(91,2,hospitals$C_BioFacility_Id)
 <hr>
 <h3>Daily Counts of ED NSSP Data</h3>
 
-```{r totalcount, echo = FALSE, fig.width=12, fig.height=4, fig.align="center"}
+```{r totalcount, echo = FALSE, comment=FALSE, warning=FALSE, fig.width=12, fig.height=4, fig.align="center"}
 #Sum across hospitals to calculate total daily counts
 total_daily = all_counts_ed %>%
   group_by(Date) %>%
