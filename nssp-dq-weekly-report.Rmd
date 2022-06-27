@@ -18,6 +18,9 @@ library(plotly)
 library(kableExtra)
 library(ggthemes)
 
+#suppress dplyr summarise messages
+options(dplyr.summarise.inform = FALSE)
+
 #load ccdph custom nssp functions
 devtools::source_url("https://github.com/Cook-County-Department-of-Public-Health/ccdph-functions/blob/master/essence-api-functions.R?raw=TRUE")
 
@@ -206,7 +209,7 @@ The figure above displays total counts of **ED** visits in NSSP for the last 90 
 <hr>
 <h3>Daily Counts of Inpatient NSSP Data for Flagged Hospitals</h3>
 
-```{r hospcountflags_inpatient, echo = FALSE, comment=FALSE, warning=FALSE, fig.width=12, fig.align='center'}
+```{r hospcountflags_inpatient, message = FALSE, echo = FALSE, comment=FALSE, warning=FALSE, fig.width=12, fig.align='center'}
 
 #Count by day for last 90 days (starting 2 days ago) for each hospital
 all_counts_inpt = count_by_hosp(91,2,hospitals$C_BioFacility_Id, inpatient_only = T)
@@ -226,7 +229,7 @@ hosp_flags_inpt = all_counts_inpt %>%
     group_by(Hospital) %>%
     summarise(min = min(Count),
               max = max(Count)
-    ) %>%
+    ) %>% 
     left_join(med_hosp_inpt, by = "Hospital") %>%
     filter(min < lower_limit | max > upper_limit)
 
@@ -267,13 +270,12 @@ The figure above displays total counts of **inpatient** visits in NSSP for the l
 <h3>Data Quality for Individual Fields by Hospital</h3>
 <br>
 
-```{r fields, echo = FALSE, comment=FALSE, warning=FALSE}
+```{r fields, echo = FALSE, comment=FALSE, warning=FALSE, message = FALSE}
 
 #Pull down data from last week (excluding today) for chief complaint, age, sex, zip, city, county; all E and I visits
 week_data_details = get_data_details(start_days_ago = 8, end_days_ago = 1, hosp_ids = hospitals$C_BioFacility_Id, hasBeenI = T,
                              fields = c("HospitalName", "date", "ChiefComplaintOrig","ccInformative", "age", "sex",
                                         "zipcode", "Patient_City", "C_Patient_County", "Race_flat", "Ethnicity_flat"))
-
 #Summarise weekly data by hospital
 week_data = week_data_details %>%
   group_by(HospitalName) %>%
@@ -289,14 +291,10 @@ week_data = week_data_details %>%
                    ) %>%
   dplyr::rename(Hospital = HospitalName) %>%
   mutate(Hospital = gsub("IL-","",Hospital)) 
-
-
-
 #Pull data for discharge diagnosis and discharge disposition for the last month minus the last week, all E & I visits
 month_data_details = get_data_details(start_days_ago = 30, end_days_ago = 7, hosp_ids = hospitals$C_BioFacility_Id, hasBeenI = T,
                                      fields = c("HospitalName", "date", "DischargeDiagnosis", "ddInformative",
                                                 "DischargeDisposition"))
-
 #Summarise by hospital
 month_data = month_data_details %>%
   group_by(HospitalName) %>%
@@ -306,8 +304,6 @@ month_data = month_data_details %>%
   ) %>%
   dplyr::rename(Hospital = HospitalName) %>%
   mutate(Hospital = gsub("IL-","",Hospital)) 
-
-
 #Data quality kable by hospital- combine week and month data
 left_join(week_data, month_data, by = "Hospital") %>%
   mutate(sum = rowSums(.[2:13])) %>%
