@@ -4,7 +4,8 @@
 #Render report
 library(rmarkdown)
 Sys.setenv(RSTUDIO_PANDOC="C:/Program Files/RStudio/bin/pandoc")
-repo_path <- "C://Users/rishi.kowalski/Code/nssp-data-quality-report/"  #not sure why but task scheduler doesn't seem to work with relative paths or getwd()
+code_fpath <- key_get("rk_code_fpath")
+repo_path <- paste0(code_fpath, "nssp-data-quality-report/")  #not sure why but task scheduler doesn't seem to work with relative paths or getwd()
 rmarkdown::render(paste0(repo_path, "nssp-dq-weekly-report.Rmd"))
 
 
@@ -28,7 +29,8 @@ if(as.Date(file.mtime(paste0(repo_path,"nssp-dq-weekly-report.html"))) == Sys.Da
             send = TRUE) 
   
   #rename and move file to appropriate folder in documents
-  tgt_path <- "C:/Users/rishi.kowalski/Documents/nssp-reports/dq-reports/"
+  docs_fpath <- key_get("rk_docs_fpath")
+  tgt_path <- paste0(docs_fpath, "nssp-reports/dq-reports/")
   new_fname <- paste0("nssp-dq-weekly-report-", format(Sys.Date(), "%m-%d-%Y"), ".html")
   file.rename(from = paste0(repo_path,"nssp-dq-weekly-report.html"),
               to = paste0(repo_path, new_fname))
