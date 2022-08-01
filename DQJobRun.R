@@ -3,6 +3,9 @@
 
 #Render report
 library(rmarkdown)
+library(rJava)
+library(mailR)
+library(keyring)
 Sys.setenv(RSTUDIO_PANDOC="C:/Program Files/RStudio/bin/pandoc")
 code_fpath <- key_get("rk_code_fpath")
 repo_path <- paste0(code_fpath, "nssp-data-quality-report/")  #not sure why but task scheduler doesn't seem to work with relative paths or getwd()
@@ -10,9 +13,6 @@ rmarkdown::render(paste0(repo_path, "nssp-dq-weekly-report.Rmd"))
 
 
 #Email report or failure notice
-library(rJava)
-library(mailR)
-library(keyring)
 
 if(as.Date(file.mtime(paste0(repo_path,"nssp-dq-weekly-report.html"))) == Sys.Date()){
   
